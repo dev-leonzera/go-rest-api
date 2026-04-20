@@ -22,7 +22,11 @@ type Task struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-var dbPool *pgxpool.Pool
+type TaskHandler struct{
+	db *pgxpool.Pool
+}
+
+//var dbPool *pgxpool.Pool
 
 func main() {
 	// 1. Connection string from environment variables
@@ -65,6 +69,7 @@ func main() {
 		log.Fatalf("Unable to create table: %v\n", err)
 	}
 
+	handler := &TaskHandler{db: dbPool}
 	// 4. Router Setup
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -92,8 +97,8 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, r))
 }
 
-func listTasks(w http.ResponseWriter, r *http.Request) {
-	rows, err := dbPool.Query(context.Background(), "SELECT id, title, completed, created_at FROM tasks ORDER BY created_at DESC")
+func (h *TaskHandler)listTasks(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.db.Query(context.Background(), "SELECT id, title, completed, created_at FROM tasks ORDER BY created_at DESC")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -114,7 +119,7 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tasks)
 }
 
-func getTask(w http.ResponseWriter, r *http.Request) {
+func (h *TaskHandler)getTask(w http.ResponseWriter, r *http.Request) {
     // 1. Captura o ID da URL usando o Chi
     idStr := chi.URLParam(r, "id")
     
@@ -127,7 +132,7 @@ func getTask(w http.ResponseWriter, r *http.Request) {
 
     var t Task
     // 3. Executa a query
-    err = dbPool.QueryRow(context.Background(),
+    err = h.db.QueryRow(context.Background(),
         "SELECT id, title, completed, created_at FROM tasks WHERE id = $1", id).
         Scan(&t.ID, &t.Title, &t.Completed, &t.CreatedAt)
 
@@ -146,14 +151,14 @@ func getTask(w http.ResponseWriter, r *http.Request) {
     json.NewEncoder(w).Encode(t)
 }
 
-func createTask(w http.ResponseWriter, r *http.Request) {
+func (h *TaskHandler)createTask(w http.ResponseWriter, r *http.Request) {
 	var t Task
 	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
 
-	err := dbPool.QueryRow(context.Background(),
+	err := h.db.QueryRow(context.Background(),
 		"INSERT INTO tasks (title, completed) VALUES ($1, $2) RETURNING id, created_at",
 		t.Title, t.Completed).Scan(&t.ID, &t.CreatedAt)
 
@@ -167,7 +172,7 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(t)
 }
 
-func updateTask(w http.ResponseWriter, r *http.Request) {
+func (h *TaskHandler)updateTask(w http.ResponseWriter, r *http.Request) {
     idStr := chi.URLParam(r, "id")
     id, err := strconv.Atoi(idStr)
     if err != nil {
@@ -184,7 +189,7 @@ func updateTask(w http.ResponseWriter, r *http.Request) {
 
     var t Task
     // Atualiza e já retorna os dados atualizados
-    err = dbPool.QueryRow(context.Background(),
+    err = h.db.QueryRow(context.Background(),
         "UPDATE tasks SET title = $1, completed = $2 WHERE id = $3 RETURNING id, title, completed, created_at",
         req.Title, req.Completed, id).
         Scan(&t.ID, &t.Title, &t.Completed, &t.CreatedAt)
@@ -202,7 +207,7 @@ func updateTask(w http.ResponseWriter, r *http.Request) {
     json.NewEncoder(w).Encode(t)
 }
 
-func deleteTask(w http.ResponseWriter, r *http.Request) {
+func (h *TaskHandler)deleteTask(w http.ResponseWriter, r *http.Request) {
     idStr := chi.URLParam(r, "id")
     id, err := strconv.Atoi(idStr)
     if err != nil {
@@ -210,7 +215,7 @@ func deleteTask(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    result, err := dbPool.Exec(context.Background(), "DELETE FROM tasks WHERE id = $1", id)
+    result, err := h.db.Exec(context.Background(), "DELETE FROM tasks WHERE id = $1", id)
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return
