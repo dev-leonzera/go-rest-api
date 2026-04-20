@@ -6,10 +6,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -75,7 +77,10 @@ func main() {
 
 	r.Route("/api/v1/tasks", func(r chi.Router) {
 		r.Get("/", listTasks)
+		r.Get("/{id}", getTask)
 		r.Post("/", createTask)
+		r.Patch("/{id}", updateTask)
+		r.Delete("/{id}", deleteTask)
 	})
 
 	port := os.Getenv("PORT")
@@ -109,6 +114,38 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tasks)
 }
 
+func getTask(w http.ResponseWriter, r *http.Request) {
+    // 1. Captura o ID da URL usando o Chi
+    idStr := chi.URLParam(r, "id")
+    
+    // 2. Converte para inteiro
+    id, err := strconv.Atoi(idStr)
+    if err != nil {
+        http.Error(w, "Invalid ID format", http.StatusBadRequest)
+        return
+    }
+
+    var t Task
+    // 3. Executa a query
+    err = dbPool.QueryRow(context.Background(),
+        "SELECT id, title, completed, created_at FROM tasks WHERE id = $1", id).
+        Scan(&t.ID, &t.Title, &t.Completed, &t.CreatedAt)
+
+    if err != nil {
+        // 4. Trata especificamente o caso de não encontrar nada (404)
+        if err == pgx.ErrNoRows {
+            http.Error(w, "Task not found", http.StatusNotFound)
+            return
+        }
+        // Se for outro erro de banco, devolve 500
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(t)
+}
+
 func createTask(w http.ResponseWriter, r *http.Request) {
 	var t Task
 	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
@@ -128,4 +165,61 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(t)
+}
+
+func updateTask(w http.ResponseWriter, r *http.Request) {
+    idStr := chi.URLParam(r, "id")
+    id, err := strconv.Atoi(idStr)
+    if err != nil {
+        http.Error(w, "Invalid ID format", http.StatusBadRequest)
+        return
+    }
+
+    // Faz o parse do payload (JSON) para pegar os novos dados
+    var req Task
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid request payload", http.StatusBadRequest)
+        return
+    }
+
+    var t Task
+    // Atualiza e já retorna os dados atualizados
+    err = dbPool.QueryRow(context.Background(),
+        "UPDATE tasks SET title = $1, completed = $2 WHERE id = $3 RETURNING id, title, completed, created_at",
+        req.Title, req.Completed, id).
+        Scan(&t.ID, &t.Title, &t.Completed, &t.CreatedAt)
+
+    if err != nil {
+        if err == pgx.ErrNoRows {
+            http.Error(w, "Task not found", http.StatusNotFound)
+            return
+        }
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(t)
+}
+
+func deleteTask(w http.ResponseWriter, r *http.Request) {
+    idStr := chi.URLParam(r, "id")
+    id, err := strconv.Atoi(idStr)
+    if err != nil {
+        http.Error(w, "Invalid ID format", http.StatusBadRequest)
+        return
+    }
+
+    result, err := dbPool.Exec(context.Background(), "DELETE FROM tasks WHERE id = $1", id)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    if result.RowsAffected() == 0 {
+        http.Error(w, "Task not found", http.StatusNotFound)
+        return
+    }
+
+    w.WriteHeader(http.StatusNoContent)
 }
